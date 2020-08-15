@@ -15,12 +15,12 @@ static volatile ReadMode readMode = MEMORY;
 
 static const float CLOCK_FREQUENCY = 16000000;
 
+// "Lookup Tables" for doing division by 0-5.
 static const uint16_t divMultiplierOpt[] = {0, 1, 1, 85, 1, 51};
 static const uint16_t divBitshiftOpt[] = {0, 0, 1, 8, 2, 8};
 static const size_t maxSoundCount = (sizeof(divMultiplierOpt) / sizeof(uint16_t)) - 1;
 
 // static const uint16_t STEP_LIMIT = (1 << 15);
-
 
 SoundPlayer::SoundPlayer(uint8_t offset, ReadMode mode = MEMORY, SamplingFrequency freq = Hz40k) {
     cli(); // Stop all interrupts...
@@ -29,13 +29,13 @@ SoundPlayer::SoundPlayer(uint8_t offset, ReadMode mode = MEMORY, SamplingFrequen
     TCCR2A = 0;
     TCCR2B = 0;
     TCNT2  = 0;
-    // set compare match register for 24khz.
-    OCR2A = freq; // = (16*10^6) / (16000*8) - 1 = 124 (must be <256)
-    // turn on CTC mode
+    // Set compare match register to the user passed Frequency.
+    OCR2A = freq;
+    // Turn on CTC mode, which triggers the interrupt on match to OCR2A.
     TCCR2A |= (1 << WGM21);
-    // Set CS21 bit for 8 prescaler
+    // Set CS21 bit for 8 Prescaler (All sampling frequencies land in this range :)).
     TCCR2B |= (1 << CS21);   
-    // enable timer compare interrupt
+    // Enable the interrupt...
     TIMSK2 |= (1 << OCIE2A);
 
     // Get the offset...
@@ -51,6 +51,7 @@ SoundPlayer::SoundPlayer(uint8_t offset, ReadMode mode = MEMORY, SamplingFrequen
     DDRD = DDRD | upperMask;  // Init lower selected ports (offset-7) as outputs.
     DDRB = DDRB | lowerMask; // Init ports (8 - (offset + 8)) as outputs.
     
+    // We compute the frequency and set the read mode!S
     sampleFreq = CLOCK_FREQUENCY / (8 * ((float)freq + 1));
     readMode = mode;
 
@@ -70,11 +71,13 @@ void SoundPlayer::play(Sound* soundArray[], unsigned int length) {
     cli();
     
     if(length > maxSoundCount) {
-        stop();
+        stop(); // We can only play 5 notes at once, if we excede that threshold, stop.
         return;
     }
+    // These multipliers allow us to avoid performing division in the interrupt.
     divMultiplier = divMultiplierOpt[length];
     divBitshift = divBitshiftOpt[length];
+    // Init the sound array and length.
     soundPtr = soundArray;
     soundPtrSize = length;
     
@@ -91,6 +94,7 @@ void SoundPlayer::setSound(Sound *sound, const uint8_t data[], size_t length, fl
     sound->data = data;
     sound->length = length;
     // We use 1024 as our substep fraction value as this allows for really fast division routines (since 1024 = 2^10).
+    // TODO: Add flexible substep which is always a power of 2. Values already there in sound struct...
     switch(unit) {
         case HERTZ: 
             sound->step = (soundDuration * length * 512) / sampleFreq;
@@ -112,13 +116,11 @@ void SoundPlayer::setSoundDuration(Sound *sound, float soundDuration, TimeUnit u
     setSound(sound, sound->data, sound->length, soundDuration, unit);
 }
 
-// static volatile int counter = 0;
-
 ISR(TIMER2_COMPA_vect) {
     /*
      * The interrupt timer, plays any notes if they are available....
      * 
-     * Note we have to avoid performing any division or modulo in the method
+     * Note we have to avoid performing any division or modulo in this method
      * as they take over 200 cycles to perform on the ATMEGA (which is stupid.)
      */
     
@@ -135,7 +137,9 @@ ISR(TIMER2_COMPA_vect) {
         tmp->location = (tmp->location < tmp->length)? tmp->location: tmp->location - tmp->length;
         tmp->remainder &= 0b111111111; // Same as (remainder % 512)
     }
-    uint8_t soundOut = (sound * divMultiplier) >> divBitshift;
+    
+    // Division via (val * (2^8 / length) / 2^8). We can cheat on 0, 1, 2, and 4.
+    uint8_t soundOut = (sound * divMultiplier) >> divBitshift; 
     
     PORTD = (PORTD & lowerMask) | (soundOut << soundOutOffset);
     PORTB = (PORTB & upperMask) | (soundOut >> (8 - soundOutOffset));
