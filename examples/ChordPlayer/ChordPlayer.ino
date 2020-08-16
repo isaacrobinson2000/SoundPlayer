@@ -344,7 +344,7 @@ void loop() {
       // and tell the SoundPlayer to play the additional sound.
       player->stop();
       size_t idx = count % arrLen;
-      player->setSound(arr[idx], sineWave, sineWaveLen, toneFreq, HERTZ);
+      player->setSoundDuration(arr[idx], toneFreq, HERTZ);
       count++;
       player->play(arr, (count / arrLen < 1)? count: arrLen);
     }
