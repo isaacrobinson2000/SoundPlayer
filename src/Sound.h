@@ -13,7 +13,7 @@ struct Sound {
     uint16_t remainder = 0;
     uint16_t step = 0;
     uint16_t remainderMask = 0;
-    uint16_t remainderShift = 0;
+    uint8_t remainderShift = 0;
 };
 
 #endif

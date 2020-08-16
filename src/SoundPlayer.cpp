@@ -93,27 +93,37 @@ Sound* SoundPlayer::newSound(const uint8_t data[], size_t length, float soundDur
 void SoundPlayer::setSound(Sound *sound, const uint8_t data[], size_t length, float soundDuration, TimeUnit unit = HERTZ) {
     sound->data = data;
     sound->length = length;
-    // We use 1024 as our substep fraction value as this allows for really fast division routines (since 1024 = 2^10).
-    // TODO: Add flexible substep which is always a power of 2. Values already there in sound struct...
+    // A flexable power of 2 substep. This substep guarantees we land 
+    // within the limits of a 16-bit integer at 1/2 max frequency. 
+    // Power of 2 also allows for super fast division routines in the interrupt.
+    sound->remainderShift = (uint16_t)(log(((1 << 15) - 1) / (length / 2.0)) / M_LN2);
+    uint16_t optPower = 1 << sound->remainderShift;
+    sound->remainderMask = optPower - 1;
+    
+    // Compute the array sub-step for this frequency given the sound player sample frequency...
     switch(unit) {
         case HERTZ: 
-            sound->step = (soundDuration * length * 512) / sampleFreq;
+            sound->step = (soundDuration * length * optPower) / sampleFreq;
             break;
         case MILLISECONDS:
-            sound->step = ((1000 / soundDuration) * length * 512) / sampleFreq;
+            sound->step = ((1000 / soundDuration) * length * optPower) / sampleFreq;
             break;
         case MICROSECONDS:
-            sound->step = ((1e6 / soundDuration) * length * 512) / sampleFreq;
+            sound->step = ((1e6 / soundDuration) * length * optPower) / sampleFreq;
             break;
         default:
-            sound->step = 512;
+            sound->step = optPower;
     }
     sound->location = 0;
     sound->remainder = 0;
 }
 
 void SoundPlayer::setSoundDuration(Sound *sound, float soundDuration, TimeUnit unit = HERTZ) {
+    size_t loc = sound->location;
+    uint16_t rem = sound->remainder;
     setSound(sound, sound->data, sound->length, soundDuration, unit);
+    sound->remainder = rem;
+    sound->location = loc;
 }
 
 ISR(TIMER2_COMPA_vect) {
@@ -130,12 +140,12 @@ ISR(TIMER2_COMPA_vect) {
     
     uint16_t sound = 0;
     for(int i = 0; i < soundPtrSize; i++) {
-        Sound* tmp = soundPtr[i];
+        Sound *tmp = soundPtr[i];
         sound += (readMode)? (uint8_t)pgm_read_byte(tmp->data + tmp->location): tmp->data[tmp->location];
         tmp->remainder += tmp->step;
-        tmp->location += tmp->remainder >> 9; // Same as (remainder / 512)
+        tmp->location += tmp->remainder >> tmp->remainderShift; // Same as (remainder / max power of two substep)
         tmp->location = (tmp->location < tmp->length)? tmp->location: tmp->location - tmp->length;
-        tmp->remainder &= 0b111111111; // Same as (remainder % 512)
+        tmp->remainder &= tmp->remainderMask; // Same as (remainder % max power of two substep)
     }
     
     // Division via (val * (2^8 / length) / 2^8). We can cheat on 0, 1, 2, and 4.
