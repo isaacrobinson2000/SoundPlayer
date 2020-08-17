@@ -92,37 +92,32 @@ Sound* SoundPlayer::newSound(const uint8_t data[], size_t length, float soundDur
 
 void SoundPlayer::setSound(Sound *sound, const uint8_t data[], size_t length, float soundDuration, TimeUnit unit = HERTZ) {
     sound->data = data;
-    sound->length = length;
-    // A flexable power of 2 substep. This substep guarantees we land 
-    // within the limits of a 16-bit integer at 1/2 max frequency. 
-    // Power of 2 also allows for super fast division routines in the interrupt.
-    sound->remainderShift = (uint16_t)(log(((1 << 15) - 1) / (length / 2.0)) / M_LN2);
-    uint16_t optPower = 1 << sound->remainderShift;
-    sound->remainderMask = optPower - 1;
-    
+    // We use a 32-bit integer to represent our "fixed-decimal" format. The 1st 16bits are 
+    // the decimal fraction, and the upper 16 are the actual whole number part. This gives 
+    // us plenty of precision while not being super slow like 32bit floats.
+    sound->length = length << 16;
     // Compute the array sub-step for this frequency given the sound player sample frequency...
     switch(unit) {
         case HERTZ: 
-            sound->step = (soundDuration * length * optPower) / sampleFreq;
+            sound->step = (soundDuration * length * (1 << 16)) / sampleFreq;
             break;
         case MILLISECONDS:
-            sound->step = ((1000 / soundDuration) * length * optPower) / sampleFreq;
+            sound->step = ((1000 / soundDuration) * length * (1 << 16)) / sampleFreq;
             break;
         case MICROSECONDS:
-            sound->step = ((1e6 / soundDuration) * length * optPower) / sampleFreq;
+            sound->step = ((1e6 / soundDuration) * length * (1 << 16)) / sampleFreq;
             break;
         default:
-            sound->step = optPower;
+            sound->step = (1 << 16);
     }
     sound->location = 0;
-    sound->remainder = 0;
 }
 
 void SoundPlayer::setSoundDuration(Sound *sound, float soundDuration, TimeUnit unit = HERTZ) {
+    // We copy the location across as the underlying sound array has not changed...
+    // This stops popping sounds from occuring between notes.
     size_t loc = sound->location;
-    uint16_t rem = sound->remainder;
     setSound(sound, sound->data, sound->length, soundDuration, unit);
-    sound->remainder = rem;
     sound->location = loc;
 }
 
@@ -138,14 +133,13 @@ ISR(TIMER2_COMPA_vect) {
         return;
     }
     
-    uint16_t sound = 0;
+    uint_fast16_t sound = 0;
     for(int i = 0; i < soundPtrSize; i++) {
         Sound *tmp = soundPtr[i];
-        sound += (readMode)? (uint8_t)pgm_read_byte(tmp->data + tmp->location): tmp->data[tmp->location];
-        tmp->remainder += tmp->step;
-        tmp->location += tmp->remainder >> tmp->remainderShift; // Same as (remainder / max power of two substep)
+        size_t loc = tmp->location >> 16;
+        sound += (readMode)? (uint_fast8_t)pgm_read_byte(tmp->data + loc): tmp->data[loc];
+        tmp->location += tmp->step;
         tmp->location = (tmp->location < tmp->length)? tmp->location: tmp->location - tmp->length;
-        tmp->remainder &= tmp->remainderMask; // Same as (remainder % max power of two substep)
     }
     
     // Division via (val * (2^8 / length) / 2^8). We can cheat on 0, 1, 2, and 4.

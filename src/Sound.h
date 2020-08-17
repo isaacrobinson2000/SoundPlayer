@@ -8,12 +8,9 @@
  */
 struct Sound {
     const uint8_t* data = nullptr;
-    size_t length = 0;
-    size_t location = 0;
-    uint16_t remainder = 0;
-    uint16_t step = 0;
-    uint16_t remainderMask = 0;
-    uint8_t remainderShift = 0;
+    uint_fast32_t length = 0;
+    uint_fast32_t location = 0;
+    uint_fast32_t step = 0;
 };
 
 #endif
