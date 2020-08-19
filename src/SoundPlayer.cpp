@@ -51,7 +51,7 @@ SoundPlayer::SoundPlayer(uint8_t offset, ReadMode mode = MEMORY, SamplingFrequen
     DDRD = DDRD | upperMask;  // Init lower selected ports (offset-7) as outputs.
     DDRB = DDRB | lowerMask; // Init ports (8 - (offset + 8)) as outputs.
     
-    // We compute the frequency and set the read mode!S
+    // We compute the frequency and set the read mode...
     sampleFreq = CLOCK_FREQUENCY / (8 * ((float)freq + 1));
     readMode = mode;
 
@@ -95,20 +95,21 @@ void SoundPlayer::setSound(Sound *sound, const uint8_t data[], size_t length, fl
     // We use a 32-bit integer to represent our "fixed-decimal" format. The 1st 16bits are 
     // the decimal fraction, and the upper 16 are the actual whole number part. This gives 
     // us plenty of precision while not being super slow like 32bit floats.
-    sound->length = length << 16;
+    sound->length = ((uint_fast32_t)length) << 16;
     // Compute the array sub-step for this frequency given the sound player sample frequency...
     switch(unit) {
         case HERTZ: 
-            sound->step = (soundDuration * length * (1 << 16)) / sampleFreq;
+            sound->step = (soundDuration * sound->length) / sampleFreq;
             break;
         case MILLISECONDS:
-            sound->step = ((1000 / soundDuration) * length * (1 << 16)) / sampleFreq;
+            sound->step = ((1000 / soundDuration) * sound->length) / sampleFreq;
             break;
         case MICROSECONDS:
-            sound->step = ((1e6 / soundDuration) * length * (1 << 16)) / sampleFreq;
+            sound->step = ((1e6 / soundDuration) * sound->length) / sampleFreq;
             break;
         default:
-            sound->step = (1 << 16);
+            // Casting required or compiler tries to fit the 1 in a 16-bit integer which causes overflow...
+            sound->step = (((uint_fast32_t)1) << 16);
     }
     sound->location = 0;
 }
@@ -116,8 +117,9 @@ void SoundPlayer::setSound(Sound *sound, const uint8_t data[], size_t length, fl
 void SoundPlayer::setSoundDuration(Sound *sound, float soundDuration, TimeUnit unit = HERTZ) {
     // We copy the location across as the underlying sound array has not changed...
     // This stops popping sounds from occuring between notes.
-    size_t loc = sound->location;
-    setSound(sound, sound->data, sound->length, soundDuration, unit);
+    uint_fast32_t loc = sound->location;
+    // Length has to be bitshifted back down as it is stored as a 'decimal' with 16 first bits being the decimal.
+    setSound(sound, sound->data, (sound->length >> 16), soundDuration, unit);
     sound->location = loc;
 }
 
@@ -128,7 +130,6 @@ ISR(TIMER2_COMPA_vect) {
      * Note we have to avoid performing any division or modulo in this method
      * as they take over 200 cycles to perform on the ATMEGA (which is stupid.)
      */
-    
     if(soundPtr == nullptr) {
         return;
     }
@@ -136,6 +137,7 @@ ISR(TIMER2_COMPA_vect) {
     uint_fast16_t sound = 0;
     for(int i = 0; i < soundPtrSize; i++) {
         Sound *tmp = soundPtr[i];
+        //Serial.println(tmp->step);
         size_t loc = tmp->location >> 16;
         sound += (readMode)? (uint_fast8_t)pgm_read_byte(tmp->data + loc): tmp->data[loc];
         tmp->location += tmp->step;
