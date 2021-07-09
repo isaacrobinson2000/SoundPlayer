@@ -13,7 +13,7 @@ static volatile uint8_t upperMask = 0;
 static volatile uint8_t lowerMask = 0;
 static volatile ReadMode readMode = MEMORY;
 
-static const float CLOCK_FREQUENCY = 16000000;
+static const float CLOCK_FREQUENCY = F_CPU;
 
 // "Lookup Tables" for doing division by 0-5.
 static const uint16_t divMultiplierOpt[] = {0, 1, 1, 85, 1, 51};
@@ -134,19 +134,26 @@ ISR(TIMER2_COMPA_vect) {
         return;
     }
     
-    uint_fast16_t sound = 0;
+    uint8_t sound = 0;
+    uint8_t soundP = 0;
+    Sound *tmp;
+    size_t loc;
+    
     for(int i = 0; i < soundPtrSize; i++) {
-        Sound *tmp = soundPtr[i];
+        tmp = soundPtr[i];
         //Serial.println(tmp->step);
-        size_t loc = tmp->location >> 16;
-        sound += (readMode)? (uint_fast8_t)pgm_read_byte(tmp->data + loc): tmp->data[loc];
+        loc = tmp->location >> 16;
+        sound += (readMode)? (uint8_t)pgm_read_byte(tmp->data + loc): tmp->data[loc];
+        // Do we detect overflow? If so we will just play the max amplitude (No point in checking other sounds as the speaker has been flooded.
+        if(sound < soundP) {
+            sound = 255;
+            break;
+        }
         tmp->location += tmp->step;
         tmp->location = (tmp->location < tmp->length)? tmp->location: tmp->location - tmp->length;
+        soundP = sound;
     }
     
-    // Division via (val * (2^8 / length) / 2^8). We can cheat on 0, 1, 2, and 4.
-    uint8_t soundOut = (sound * divMultiplier) >> divBitshift; 
-    
-    PORTD = (PORTD & lowerMask) | (soundOut << soundOutOffset);
-    PORTB = (PORTB & upperMask) | (soundOut >> (8 - soundOutOffset));
+    PORTD = (PORTD & lowerMask) | (sound << soundOutOffset);
+    PORTB = (PORTB & upperMask) | (sound >> (8 - soundOutOffset));
 }
